@@ -230,15 +230,17 @@
         ;; In a real quadratic voting system, we would track user votes individually
         ;; For this simplified version, we just increment based on sender
         ;; Simplification: One vote per call, no cost for now (requires token locking in full spec)
-        (asserts! (< block-height (get voting-ends proposal)) ERR-VOTING-ENDED)
-        
-        (map-set proposals proposal-id
-            (merge proposal {
-                votes-for: (if vote (+ (get votes-for proposal) u1) (get votes-for proposal)),
-                votes-against: (if vote (get votes-against proposal) (+ (get votes-against proposal) u1))
-            })
+        (begin
+            (asserts! (< block-height (get voting-ends proposal)) ERR-VOTING-ENDED)
+            
+            (map-set proposals proposal-id
+                (merge proposal {
+                    votes-for: (if vote (+ (get votes-for proposal) u1) (get votes-for proposal)),
+                    votes-against: (if vote (get votes-against proposal) (+ (get votes-against proposal) u1))
+                })
+            )
+            (ok true)
         )
-        (ok true)
     )
 )
 
@@ -252,31 +254,35 @@
             (proposal (unwrap! (map-get? proposals proposal-id) ERR-NOT-FOUND))
             (contribution-id (generate-contribution-id))
         )
-        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-        
-        ;; Mint NFT
-        (let ((nft-id (generate-nft-id)))
-            (try! (nft-mint? impact-nft nft-id tx-sender))
-            (map-set nft-metadata nft-id {
-                owner: tx-sender,
-                token-uri: "https://opensciencex.io/metadata/impact-nft.json"
-            })
+        (begin
+            (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
             
-            (map-set contributions contribution-id {
-                donor: tx-sender,
-                proposal-id: proposal-id,
-                amount: amount,
-                nft-id: nft-id,
-                timestamp: block-height
-            })
-            
-            (map-set proposals proposal-id
-                (merge proposal {
-                    funding-received: (+ (get funding-received proposal) amount),
-                    status: (if (>= (+ (get funding-received proposal) amount) (get funding-requested proposal)) STATUS-FUNDED (get status proposal))
-                })
+            ;; Mint NFT
+            (let ((nft-id (generate-nft-id)))
+                (begin
+                    (try! (nft-mint? impact-nft nft-id tx-sender))
+                    (map-set nft-metadata nft-id {
+                        owner: tx-sender,
+                        token-uri: "https://opensciencex.io/metadata/impact-nft.json"
+                    })
+                    
+                    (map-set contributions contribution-id {
+                        donor: tx-sender,
+                        proposal-id: proposal-id,
+                        amount: amount,
+                        nft-id: nft-id,
+                        timestamp: block-height
+                    })
+                    
+                    (map-set proposals proposal-id
+                        (merge proposal {
+                            funding-received: (+ (get funding-received proposal) amount),
+                            status: (if (>= (+ (get funding-received proposal) amount) (get funding-requested proposal)) STATUS-FUNDED (get status proposal))
+                        })
+                    )
+                    (ok contribution-id)
+                )
             )
-            (ok contribution-id)
         )
     )
 )
@@ -291,16 +297,18 @@
             (proposal (unwrap! (map-get? proposals proposal-id) ERR-NOT-FOUND))
             (milestone-id (generate-milestone-id))
         )
-        (asserts! (is-eq tx-sender (get researcher proposal)) ERR-NOT-AUTHORIZED)
-        (map-set milestones milestone-id {
-            proposal-id: proposal-id,
-            title: title,
-            funding-amount: funding-amount,
-            status: "PENDING",
-            deliverable-hash: none,
-            completed-at: none
-        })
-        (ok milestone-id)
+        (begin
+            (asserts! (is-eq tx-sender (get researcher proposal)) ERR-NOT-AUTHORIZED)
+            (map-set milestones milestone-id {
+                proposal-id: proposal-id,
+                title: title,
+                funding-amount: funding-amount,
+                status: "PENDING",
+                deliverable-hash: none,
+                completed-at: none
+            })
+            (ok milestone-id)
+        )
     )
 )
 
@@ -310,14 +318,16 @@
             (milestone (unwrap! (map-get? milestones milestone-id) ERR-NOT-FOUND))
             (proposal (unwrap! (map-get? proposals (get proposal-id milestone)) ERR-NOT-FOUND))
         )
-        (asserts! (is-eq tx-sender (get researcher proposal)) ERR-NOT-AUTHORIZED)
-        (map-set milestones milestone-id
-            (merge milestone {
-                deliverable-hash: (some deliverable-hash),
-                status: "SUBMITTED"
-            })
+        (begin
+            (asserts! (is-eq tx-sender (get researcher proposal)) ERR-NOT-AUTHORIZED)
+            (map-set milestones milestone-id
+                (merge milestone {
+                    deliverable-hash: (some deliverable-hash),
+                    status: "SUBMITTED"
+                })
+            )
+            (ok true)
         )
-        (ok true)
     )
 )
 
@@ -326,20 +336,26 @@
         (
             (milestone (unwrap! (map-get? milestones milestone-id) ERR-NOT-FOUND))
             (proposal (unwrap! (map-get? proposals (get proposal-id milestone)) ERR-NOT-FOUND))
+            (amount (get funding-amount milestone))
+            (researcher (get researcher proposal))
         )
-        ;; Simplified: Anyone can approve for now (in reality, should be governance or specific voters)
-        (asserts! (is-eq (get status milestone) "SUBMITTED") ERR-INVALID-STATUS)
-        
-        ;; Release funds
-        (try! (as-contract (stx-transfer? (get funding-amount milestone) tx-sender (get researcher proposal))))
-        
-        (map-set milestones milestone-id
-            (merge milestone {
-                status: "APPROVED",
-                completed-at: (some block-height)
-            })
+        (begin
+            ;; Simplified: Anyone can approve for now (in reality, should be governance or specific voters)
+            (asserts! (is-eq (get status milestone) "SUBMITTED") ERR-INVALID-STATUS)
+            
+            ;; Release funds
+            ;; We use as-contract to switch context to the contract principal
+            ;; checks checks if the contract has enough funds and sends to researcher
+            (try! (as-contract (stx-transfer? amount tx-sender researcher)))
+            
+            (map-set milestones milestone-id
+                (merge milestone {
+                    status: "APPROVED",
+                    completed-at: (some block-height)
+                })
+            )
+            (ok true)
         )
-        (ok true)
     )
 )
 
